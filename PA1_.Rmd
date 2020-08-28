@@ -1,0 +1,97 @@
+---
+title: "Activity Prediction"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(readr)
+library(dplyr)
+library(caret)
+library(tidyr)
+library(rpart)
+library(rattle)
+library(ggplot2)
+library(ggfortify)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Loading and Preprocessing the Data
+```{r, results = "hide", cache = TRUE}
+dat <- read_csv("pml-training.csv", na = c("", "NA", "#DIV/0!"))
+test <- read.csv("pml-testing.csv", na = c("", "NA", "#DIV/0!"))
+
+dat <- dat[, -c(1:7, nearZeroVar(dat))]
+
+```
+
+We load the two datasets and drop columns from the training set that are not useful for prediction. To be precise, we drop the first seven columns. (The first one is just a serial number, the other six exist only to uniquely identify the observation. They have no discriminating value.) We also drop the columns with near zero variance, those with very few unique values and those with a single dominating value. We now investigate the number of NA values in our data.
+
+```{r}
+dat %>% mutate_all(is.na) %>% summarise_all(sum) %>% pivot_longer(1:118, names_to="var", values_to="na_count") %>% arrange(desc(na_count)) %>% pull(na_count)
+```
+
+We can see the NA distribution in the data is very bimodal. Either most of the column is NA or none of it is. Hence, we can safely drop all NA columns without losing any information. We also partition the data into a 60-40 training and dev set. We will train the three different models on the training set: Decision Trees, Random Forests and Boosting.
+
+```{r, results = "hide"}
+dat <- dat %>% select_if(~all(!is.na(.)))
+
+train.idx <- createDataPartition(dat$classe, p = 0.6, list = FALSE)[, 1]
+train <- dat[train.idx, ]
+dev <- dat[-train.idx, ]
+```
+
+## Decision Tree
+
+```{r}
+model.tree <- rpart(classe ~ ., train, method = "class")
+
+predictions.tree <- predict(model.tree, dev, type="class")
+
+matrix.tree <- confusionMatrix(predictions.tree, as.factor(dev$classe))
+matrix.tree
+plot(matrix.tree$table, main = "Confusion Matrix for the Decision Tree")
+```
+
+The decision tree is the best human-understandable classifier and it gets a decent 74% accuracy score. Much better than what a no-information classifier would get: 28%. However, there is still scope for improvement.
+
+## Random Forests
+
+```{r, results = "hide", cache = TRUE}
+control.rand_for <- trainControl(method = "cv", number = 10, verboseIter = FALSE)
+model.rand_for <- train(classe ~ ., data = train, method = "rf", trControl=control.rand_for)
+
+predictions.rand_for <- predict(model.rand_for, dev, type = "raw")
+
+matrix.rand_for <- confusionMatrix(predictions.rand_for, as.factor(dev$classe))
+```
+```{r}
+matrix.rand_for
+plot(matrix.rand_for$table, main = "Confusion Matrix for Random Forests")
+```
+
+Random Forests perform exceptionally well achieving almost 100% accuracy on our hold-out set. We have used ordinary cross validation (size = 10) to train the model.
+
+## Boosting
+
+```{r,  results = "hide", cache = TRUE}
+control.gbm <- trainControl(method = "cv", number = 10, verboseIter = FALSE)
+model.gbm <- train(classe ~ ., data = train, method = "gbm", trControl=control.gbm)
+
+predictions.gbm <- predict(model.gbm, dev, type = "raw")
+
+matrix.gbm <- confusionMatrix(predictions.gbm, as.factor(dev$classe))
+```
+```{r}
+matrix.gbm
+plot(matrix.gbm$table, main = "Confusion Matrix for Boosting")
+```
+
+Boosting is significantly better than a decision tree but falls just short of a model based on random forests. We have used ordinary cross validation (size = 10) to train the model.
+
+## Predictions
+
+Finally, we use the Random Forests model to predict the 20 quiz questions:
+
+```{r}
+predict(model.rand_for, newdata = test)
+```
